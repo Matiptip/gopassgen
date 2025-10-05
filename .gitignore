@@ -1,0 +1,19 @@
+﻿# Binaries
+/bin/
+/build/
+/*.exe
+/*.dll
+/*.so
+/*.dylib
+
+# GOPATH
+/pkg/
+
+# IDE/editor
+.vscode/
+.idea/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
