@@ -1,0 +1,12 @@
+git status        # confirm files to add
+git add .
+git commit -m "Initial commit"cd C:\Users\Usuario\code\gopassgen
+
+# confirm current branch and commit
+git status
+git log --oneline -n 5
+git branch -vv
+git remote -v
+
+# push the main branch to origin
+git push -u origin main
