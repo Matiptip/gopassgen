@@ -17,3 +17,6 @@
 # OS files
 .DS_Store
 Thumbs.db
+
+# outputs de gopassgen
+passwords*.txt
