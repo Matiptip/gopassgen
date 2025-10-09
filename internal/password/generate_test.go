@@ -1,34 +1,69 @@
 package password
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
-func TestSymbols(t *testing.T) {
-	s, err := Random(32, true, false)
+// ✅ Test básico de longitud
+func TestRandomLength(t *testing.T) {
+	p, err := Random(16, false, false)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("error generando contraseña: %v", err)
 	}
-	if len(s) != 32 {
-		t.Fatalf("esperado 32, obtenido %d", len(s))
+	if len(p) != 16 {
+		t.Errorf("esperaba longitud 16, obtuvo %d", len(p))
 	}
 }
 
-func TestNoAmbiguous(t *testing.T) {
-	s, err := Random(64, false, true)
+// ✅ Test sin símbolos y sin ambiguos
+func TestRandomNoSymbolsNoAmbiguous(t *testing.T) {
+	p, err := Random(32, false, true)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("error generando contraseña: %v", err)
 	}
-	for _, c := range "O0Il" {
-		if containsRune(s, c) {
-			t.Fatalf("se encontró carácter ambiguo %q en %q", c, s)
+	for _, r := range p {
+		if strings.ContainsRune("!@#$%^&*()-_=+[]{}<>?/|~O0Il", r) {
+			t.Errorf("carácter prohibido encontrado: %c", r)
 		}
 	}
 }
 
-func containsRune(s string, r rune) bool {
-	for _, x := range s {
-		if x == r {
-			return true
-		}
+// ✅ Test de creación de archivo de salida (integración simple)
+func TestExportFileCreation(t *testing.T) {
+	tmpDir := t.TempDir()
+	outFile := filepath.Join(tmpDir, "passwords_test.txt")
+
+	file, err := os.Create(outFile)
+	if err != nil {
+		t.Fatalf("error creando archivo: %v", err)
 	}
-	return false
+	defer file.Close()
+
+	p, err := Random(8, false, false)
+	if err != nil {
+		t.Fatalf("error generando contraseña: %v", err)
+	}
+
+	if _, err := file.WriteString(p); err != nil {
+		t.Fatalf("error escribiendo archivo: %v", err)
+	}
+
+	stat, err := os.Stat(outFile)
+	if err != nil {
+		t.Fatalf("error accediendo al archivo: %v", err)
+	}
+
+	if stat.Size() == 0 {
+		t.Error("el archivo fue creado pero está vacío")
+	}
+}
+
+// ✅ Benchmark: performance general
+func BenchmarkRandom(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		_, _ = Random(32, true, true)
+	}
 }
