@@ -1,0 +1,21 @@
+@"
+# binarios y artefactos
+bin/
+*.exe
+*.test
+*.out
+
+# módulos/cache
+vendor/
+.gomodcache/
+go.work
+go.work.sum
+
+# tooling/editor
+.vscode/
+.idea/
+.DS_Store
+
+# cobertura
+coverage.out
+"@ | Out-File -Encoding UTF8 .gitignore

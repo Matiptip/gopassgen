@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/Matiptip/gopassgen/internal/password"
@@ -26,12 +27,11 @@ func main() {
 	case "version":
 		fmt.Println("gopassgen", version.Version)
 	default:
-		fmt.Println("Comando desconocido. Usa 'generate', 'export' o 'version'.")
-		os.Exit(1)
+		fmt.Println("Comando desconocido:", os.Args[1])
 	}
 }
 
-// --- Generar y mostrar contraseñas ---
+// ✅ Genera contraseñas simples (modo tradicional)
 func handleGenerate() {
 	length := flag.Int("len", 16, "Longitud de la contraseña")
 	count := flag.Int("n", 1, "Cantidad de contraseñas")
@@ -48,7 +48,7 @@ func handleGenerate() {
 	}
 }
 
-// --- Exportar contraseñas a texto o JSON ---
+// ✅ Exporta contraseñas a archivo (modo paralelo opcional)
 func handleExport() {
 	length := flag.Int("len", 16, "Longitud de la contraseña")
 	count := flag.Int("n", 5, "Cantidad de contraseñas")
@@ -56,15 +56,21 @@ func handleExport() {
 	noAmbiguous := flag.Bool("no-ambiguous", false, "Excluir caracteres ambiguos")
 	format := flag.String("format", "text", "Formato de salida: text|json")
 	output := flag.String("o", "", "Archivo de salida (opcional)")
+	parallel := flag.Bool("parallel", false, "Generar contraseñas en modo concurrente")
 	flag.CommandLine.Parse(os.Args[2:])
 
 	passwords := make([]string, *count)
-	for i := 0; i < *count; i++ {
-		p, err := password.Random(*length, *useSymbols, *noAmbiguous)
-		if err != nil {
-			log.Fatalf("error generando contraseña: %v", err)
+
+	if *parallel {
+		generateParallel(passwords, *length, *useSymbols, *noAmbiguous)
+	} else {
+		for i := 0; i < *count; i++ {
+			p, err := password.Random(*length, *useSymbols, *noAmbiguous)
+			if err != nil {
+				log.Fatalf("error generando contraseña: %v", err)
+			}
+			passwords[i] = p
 		}
-		passwords[i] = p
 	}
 
 	if *output == "" {
@@ -72,13 +78,54 @@ func handleExport() {
 		*output = fmt.Sprintf("passwords_%s.%s", timestamp, *format)
 	}
 
-	file, err := os.Create(*output)
+	savePasswords(*output, *format, passwords)
+	fmt.Printf("✅ %d contraseñas exportadas en %s (%s)\n", *count, *output, *format)
+}
+
+// ✅ Generación concurrente
+func generateParallel(passwords []string, length int, useSymbols bool, noAmbiguous bool) {
+	var wg sync.WaitGroup
+	wg.Add(len(passwords))
+	results := make(chan struct {
+		index int
+		value string
+		err   error
+	}, len(passwords))
+
+	for i := range passwords {
+		go func(i int) {
+			defer wg.Done()
+			p, err := password.Random(length, useSymbols, noAmbiguous)
+			results <- struct {
+				index int
+				value string
+				err   error
+			}{i, p, err}
+		}(i)
+	}
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	for r := range results {
+		if r.err != nil {
+			log.Fatalf("error generando contraseña: %v", r.err)
+		}
+		passwords[r.index] = r.value
+	}
+}
+
+// ✅ Guardado de contraseñas (text o JSON)
+func savePasswords(output string, format string, passwords []string) {
+	file, err := os.Create(output)
 	if err != nil {
 		log.Fatalf("error creando archivo: %v", err)
 	}
 	defer file.Close()
 
-	switch *format {
+	switch format {
 	case "json":
 		data, err := json.MarshalIndent(passwords, "", "  ")
 		if err != nil {
@@ -90,6 +137,4 @@ func handleExport() {
 			fmt.Fprintln(file, p)
 		}
 	}
-
-	fmt.Printf("✅ %d contraseñas exportadas en %s (%s)\n", *count, *output, *format)
 }
