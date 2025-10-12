@@ -5,7 +5,12 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
+	"path/filepath"
+	"runtime"
+	"runtime/pprof"
 	"sync"
 	"time"
 
@@ -14,10 +19,12 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("Uso: gopassgen [generate|export|version]")
-		os.Exit(1)
-	}
+	go func() {
+		log.Println("pprof disponible en http://localhost:6060/debug/pprof/")
+		if err := http.ListenAndServe("localhost:6060", nil); err != nil {
+			log.Printf("Error iniciando servidor pprof: %v", err)
+		}
+	}()
 
 	switch os.Args[1] {
 	case "generate":
@@ -50,19 +57,49 @@ func handleGenerate() {
 
 // ✅ Exporta contraseñas a archivo (modo paralelo opcional)
 func handleExport() {
-	length := flag.Int("len", 16, "Longitud de la contraseña")
-	count := flag.Int("n", 5, "Cantidad de contraseñas")
-	useSymbols := flag.Bool("symbols", false, "Incluir símbolos especiales")
-	noAmbiguous := flag.Bool("no-ambiguous", false, "Excluir caracteres ambiguos")
-	format := flag.String("format", "text", "Formato de salida: text|json")
-	output := flag.String("o", "", "Archivo de salida (opcional)")
-	parallel := flag.Bool("parallel", false, "Generar contraseñas en modo concurrente")
-	flag.CommandLine.Parse(os.Args[2:])
+	fs := flag.NewFlagSet("export", flag.ExitOnError)
+
+	length := fs.Int("len", 16, "Longitud de la contraseña")
+	count := fs.Int("n", 5, "Cantidad de contraseñas")
+	useSymbols := fs.Bool("symbols", false, "Incluir símbolos especiales")
+	noAmbiguous := fs.Bool("no-ambiguous", false, "Excluir caracteres ambiguos")
+	format := fs.String("format", "text", "Formato de salida: text|json")
+	output := fs.String("o", "", "Archivo de salida (opcional)")
+	parallel := fs.Int("parallel", 1, "Número de workers concurrentes (1 = secuencial)")
+	cpuprofile := fs.String("cpuprofile", "", "Archivo de perfil de CPU (ej: cpu.pprof)")
+	memprofile := fs.String("memprofile", "", "Archivo de perfil de memoria (ej: mem.pprof)")
+
+	// Parsear SOLO los flags del subcomando export
+	fs.Parse(os.Args[2:])
+
+	// Si el usuario pasó nombre relativo, convertir a absoluto para evitar dudas de carpeta
+	if *cpuprofile != "" && !filepath.IsAbs(*cpuprofile) {
+		abs, _ := filepath.Abs(*cpuprofile)
+		*cpuprofile = abs
+	}
+	if *memprofile != "" && !filepath.IsAbs(*memprofile) {
+		abs, _ := filepath.Abs(*memprofile)
+		*memprofile = abs
+	}
+
+	// Log de control (verás esto en la terminal)
+	log.Printf("cpuprofile=%q memprofile=%q\n", *cpuprofile, *memprofile)
+
+	// Iniciar CPU profile (si corresponde)
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			log.Fatalf("No se pudo crear cpuprofile: %v", err)
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatalf("Error iniciando cpuprofile: %v", err)
+		}
+		defer pprof.StopCPUProfile()
+	}
 
 	passwords := make([]string, *count)
-
-	if *parallel {
-		generateParallel(passwords, *length, *useSymbols, *noAmbiguous)
+	if *parallel > 1 {
+		generateParallel(passwords, *length, *useSymbols, *noAmbiguous, *parallel)
 	} else {
 		for i := 0; i < *count; i++ {
 			p, err := password.Random(*length, *useSymbols, *noAmbiguous)
@@ -79,31 +116,54 @@ func handleExport() {
 	}
 
 	savePasswords(*output, *format, passwords)
+
+	// Heap profile al final (si se pidió)
+	if *memprofile != "" {
+		f, err := os.Create(*memprofile)
+		if err != nil {
+			log.Fatalf("No se pudo crear memprofile: %v", err)
+		}
+		defer f.Close()
+		runtime.GC() // mejora representatividad del heap profile
+		if err := pprof.WriteHeapProfile(f); err != nil {
+			log.Fatalf("Error escribiendo heap profile: %v", err)
+		}
+	}
+
 	fmt.Printf("✅ %d contraseñas exportadas en %s (%s)\n", *count, *output, *format)
 }
-
-// ✅ Generación concurrente
-func generateParallel(passwords []string, length int, useSymbols bool, noAmbiguous bool) {
+func generateParallel(passwords []string, length int, useSymbols bool, noAmbiguous bool, workers int) {
 	var wg sync.WaitGroup
-	wg.Add(len(passwords))
+	tasks := make(chan int, len(passwords))
 	results := make(chan struct {
 		index int
 		value string
 		err   error
 	}, len(passwords))
 
+	// Cargar tareas
 	for i := range passwords {
-		go func(i int) {
+		tasks <- i
+	}
+	close(tasks)
+
+	// Lanzar workers
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
 			defer wg.Done()
-			p, err := password.Random(length, useSymbols, noAmbiguous)
-			results <- struct {
-				index int
-				value string
-				err   error
-			}{i, p, err}
-		}(i)
+			for i := range tasks {
+				p, err := password.Random(length, useSymbols, noAmbiguous)
+				results <- struct {
+					index int
+					value string
+					err   error
+				}{i, p, err}
+			}
+		}()
 	}
 
+	// Esperar finalización
 	go func() {
 		wg.Wait()
 		close(results)
